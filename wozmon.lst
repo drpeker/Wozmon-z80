@@ -1,0 +1,410 @@
+                        ; --------------------------------------
+                        ; zasm: assemble "wozmon.asm"
+                        ; date: 2025-09-04 19:08:22
+                        ; --------------------------------------
+
+
+                        ; Ported to  Bare-ROM z80 systems By Dr. Peker 2025
+                        ; Monitor can run on standalone z80 systems. All CP/M depencencies removed.
+                        ; BUFFER structure changed to run in flexible memory locations.
+                        ; Backspace BUG corrected.
+                        ; uses 8251 for serial I/O but also 6551 or 6850 can be used with minor changes.
+                        ; 8251 init code added and must be called once before using the monitor to run as
+                        ; standalone system.
+                        ; Wozmon for Z80 By Dr.Peker 2025
+                        ; Original code from Wozmon for 6502 by Christian Welzel 2023
+                        ; Christian Welzel 2023 - www.welzel-online.ch
+                        ; 
+                        ; Code can be compiled in Zasm assembler by following parameters:
+                        ;./ zasm -uwy --target=ram -x wozmon.asm -o wozmon.hex
+                        
+                        ; Optional "Wozmon" greeting at start-up added. (can be removed to save space)
+                        ;               
+                        
+                        ; Keys and Characters
+                        ;
+0008:                   BS		.EQU 	$08					; Backspace
+000A:                   LF		.EQU 	$0A					; Line Feed
+000D:                   CR		.EQU	$0D					; Carriage Return
+001B:                   ESC		.EQU 	$1B					; Escape
+000C:                   FF		.EQU 	$0C					; Form feed 
+0020:                   SPC		.EQU 	' '					; Space
+002E:                   DOT		.EQU 	'.'					; Period
+003A:                   COLON	.EQU 	':'					; Colon  
+005C:                   BACKSL	.EQU 	$5C					; back slash 
+0011:                   CTRLQ   .EQU 	$11					; Ctrl-Q to enter SYMON monitor
+                        
+FFFF:                   stack_top .EQU $FFFF
+                        
+0072:                   QUIT .EQU  $0072                  ; QUIT address for Efex prompt
+                        ;Change Quit adress as needed. 
+                        
+B400:                   XAML	.EQU 	$b400				; start at free space in upper RAM
+B401:                   XAMH	.EQU 	XAML + 1
+B402:                   STL		.EQU 	XAMH + 1
+B403:                   STH		.EQU 	STL + 1
+B404:                   L		.EQU 	STH + 1
+B405:                   H		.EQU 	L + 1
+B406:                   YSAV	.EQU 	H + 1
+B41D:                   MODE	.EQU 	YSAV + 23
+B420:                   COUNTR	.EQU 	MODE + 3
+B423:                   SADDR   .EQU 	COUNTR + 3  
+                        
+B000:                   INBUF    .EQU  $B000                  ; Input buffer
+                        
+                        ; I/O port addresses
+                                       
+A000:                                   org $A000
+                                        
+A000: C303A0   [10]                     jp      RESET
+                        
+                        ;
+                        ; input buffer
+                        ;
+                        
+                        
+A003:                   RESET
+A003: 31FFFF   [10]                     ld		sp, stack_top   ; Init Stack
+A006: FD2100B0 [24]                     ld      iy, $B000
+                                        ;ld      a, $00          ; Reset A
+A00A: 3E0C     [31]                     ld a, $0c    ; Form feed
+A00C: CD90A1   [48]                     call OUTCH
+A00F: 3E0A     [55]                     ld a, $0a    ; Form feed
+A011: CD90A1   [72]                     call OUTCH
+A014: 3E07     [79]                     ld a, $07    ; BELL
+A016: CD90A1   [96]                     call OUTCH
+A019: 3E57     [103]                    ld a, 'W'    ; Form feed
+A01B: CD90A1   [120]                    call OUTCH
+A01E: 3E6F     [127]                    ld a, 'o'    ; Form feed
+A020: CD90A1   [144]                    call OUTCH
+A023: 3E7A     [151]                    ld a, 'z'    ; Form feed
+A025: CD90A1   [168]                    call OUTCH
+A028: 3E6D     [175]                    ld a, 'm'   ; Form feed
+A02A: CD90A1   [192]                    call OUTCH
+A02D: 3E6F     [199]                    ld a, 'o'    ; Form feed
+A02F: CD90A1   [216]                    call OUTCH
+A032: 3E6E     [223]                    ld a, 'n'   ; Form feed
+A034: CD90A1   [240]                    call OUTCH
+A037: 3E0A     [247]                     ld a, $0a    ; Form feed
+A039: CD90A1   [264]                    call OUTCH
+A03C: 3E0D     [271]                    ld a, $0d    ; Form feed
+A03E: CD90A1   [288]                    call OUTCH
+                                        
+                        
+A041: 3E00     [295]                    ld      a, 00          ; Clear MODE (XAM mode).
+                        
+                        
+A043:                   NOTCR
+A043: FE08     [ 7]                     cp      $08             ; Backspace key?
+A045: 2822     [14|19]                  jr      z, BACKSPACE
+A047: FE1B     [21]                     cp      $1B             ; ESC?
+A049: 2806     [28|33]                  jr      z, ESCAPE       ; Yes.
+                                        ;inc     iy              ; Advance text index.
+                        
+A04B: FD45     [36]                     ld      b, iyl          ; Auto ESC if line longer than 127.
+A04D: CB78     [44]                     bit     7, b            ;   ...
+A04F: 282A     [51|56]                  jr      z, NEXTCHAR     ;     jp if bit 7 is not set (plus)
+                        
+A051: 3EFF     [ 7]     ESCAPE          ld      a, 	$FF			; clear screen
+A053: CD5DA1   [24]          		    call 	ECHO
+A056: 3E5C     [31]                     ld      a, $5C          ; "\".
+A058: CD5DA1   [48]                     call    ECHO            ; Output it.
+                        
+A05B:                   GETLIN
+A05B: 3E0D     [ 7]                     ld      a, $0D          ; Send CR
+A05D: CD5DA1   [24]                     call    ECHO
+A060: 3E0A     [31]                     ld      a, $0A          ; Send LF
+A062: CD5DA1   [48]                     call    ECHO
+A065: FD2101B0 [62]                     ld      iy, INBUF + 1    ; Initialize text index.
+                        
+                        
+A069: FD2B     [10]     BACKSPACE       dec     iy              ; Back up text index.
+A06B: FD45     [18]                     ld      b, iyl          ; Beyond start of line, reinitialize.
+A06D: CB78     [26]                     bit     7, b            ;   ...
+A06F: 20EA     [33|38]                  jr      nz, GETLIN     ;     jp if bit 7 is set (minus)
+A071: 3E20     [40]                     ld      a, SPC           ; Send space (overwrite)
+A073: CD5DA1   [57]                     call    ECHO
+A076: 3E08     [64]                     ld      a, BS           ; and Backspace again.
+A078: CD5DA1   [81]                     call    ECHO
+                        
+A07B:                   NEXTCHAR
+A07B: CD9CA1   [17]                     CALL GETCH   ; Read a char from "virtual" UART
+A07E: FEFF     [24]                     cp      $FF             ; Char? ($FF from UART = no char)
+A080: 28F9     [31|36]                  jr      z, NEXTCHAR     ; No, loop until valid character
+A082: FE08     [38]                     cp      $08             ; Backspace key?
+A084: CC61A1   [48|55]                  call      z, BACKPACK
+A087: FD23     [58]                     inc     iy 
+A089: FD7700   [77]                     ld      (iy), a      ; Add to text buffer.
+A08C: CD5DA1   [94]                     call    ECHO            ; Display character.
+A08F: FE0D     [101]                    cp      $0D             ; CR?
+A091: 20B0     [108|113]                jr      nz, NOTCR       ; No.
+                        
+A093: FD2100B0 [122]                    ld      iy, INBUF        ; Reset text index. (DEFAULT ınbuf)
+A097: 3E00     [129]                    ld      a, $00          ; For XAM mode.
+A099: DD6F     [137]                    ld      ixl, a          ; TAX  ; X=0.
+A09B:                   SETBLOCK
+A09B: CB27     [ 8]                     sla     a
+A09D:                   SETSTOR
+A09D: CB27     [ 8]                     sla     a               ; Leaves $7B if setting STOR mode.
+A09F: 321DB4   [21]                     ld      (MODE), a       ; $00 = XAM, $74 = STOR, $B8 = BLOK XAM.
+A0A2:                   BLSKIP
+A0A2: FD23     [10]                     inc     iy              ; Advance text index.
+A0A4:                   NEXTITEM
+A0A4: FD7E00   [19]                     ld      a, (iy)      ; Get character.
+A0A7: FE0D     [26]                     cp      $0D             ; CR?
+A0A9: 28B0     [33|38]                  jr      z, GETLIN      ; Yes, done this line.
+A0AB: FE2E     [40]                     cp      $2E             ; "."?
+A0AD: 38F3     [47|52]                  jr      c, BLSKIP       ; Skip delimiter.
+A0AF: 28EA     [54|59]                  jr      z, SETBLOCK     ; Set BLOCK XAM mode.
+A0B1: FE3A     [61]                     cp      $3A             ; ":"?
+A0B3: 28E8     [68|73]                  jr      z, SETSTOR      ; Yes, set STOR mode.
+A0B5: FE52     [75]                     cp      $52             ; "R"?
+A0B7: 2845     [82|87]                  jr      z, RUN          ; Yes, run user program.
+A0B9: FE51     [89]                     cp      'Q'           ; "Q"?
+A0BB: CA7200   [99|99]                  jp      z, QUIT            ; Yes, quit to user program.
+A0BE: 210000   [109]                    ld      hl, $0000       ; $00 -> L and H.
+A0C1: FD2206B4 [129]                    ld      (YSAV), iy      ; Save Y for comparison
+                        
+A0C5:                   NEXTHEX
+A0C5: FD7E00   [19]                     ld      a, (iy)      ; Get character for hex test.
+A0C8: EE30     [26]                     xor     $30             ; Map digits to $0-9.
+A0CA: FE0A     [33]                     cp      $0A             ; Digit?
+A0CC: 3806     [40|45]                  jr      c, DIG          ; Yes.
+A0CE: CE89     [47]                     adc     a, $89          ; Map letter "A"-"F" to $FA-FF.
+A0D0: FEF9     [54]                     cp      $F9             ; Hex letter?
+A0D2: 3815     [61|66]                  jr      c, NOTHEX       ; No, character not hex.
+A0D4:                   DIG
+A0D4: CB27     [ 8]                     sla     a
+A0D6: CB27     [16]                     sla     a               ; Hex digit to MSD of A.
+A0D8: CB27     [24]                     sla     a
+A0DA: CB27     [32]                     sla     a
+                        
+A0DC: 0604     [39]                     ld      b, $04          ; Shift count.
+A0DE:                   HEXSHIFT
+A0DE: 17       [ 4]                     rla                     ; Hex digit left, MSB to carry.
+A0DF: CB15     [12]                     rl      l               ; Rotate into LSD.
+A0E1: CB14     [20]                     rl      h               ; Rotate into MSD's.
+A0E3: 10F9     [28|33]                  djnz    HEXSHIFT        ; Done 4 shifts?
+                                                                ; No, loop.
+A0E5: FD23     [38]                     inc     iy              ; Advance text index.
+A0E7: 18DC     [50]                     jr      NEXTHEX         ; Always taken. Check next character for hex.
+                        
+A0E9:                   NOTHEX
+A0E9: FD45     [ 8]                     ld      b, iyl          ; Check if L, H empty (no hex digits). 
+A0EB: 3A06B4   [21]                     ld      a, (YSAV)       ;   ...
+A0EE: B8       [25]                     cp      b               ;     ...
+A0EF: CA51A0   [35|35]                  jp      z, ESCAPE       ; Yes, generate ESC sequence.
+                        
+A0F2: 3A1DB4   [48]                     ld      a, (MODE)       ; Load MODE to A
+A0F5: CB77     [56]                     bit     6, a            ; Test MODE byte: "overflow" bit
+A0F7: 2807     [63|68]                  jr      z, NOTSTOR      ; B6=1 is STOR, 0 is XAM and BLOCK XAM.
+                        
+A0F9: 7D       [67]                     ld      a, l            ; LSD's of hex data.
+A0FA: 12       [74]                     ld      (de), a         ;   ...
+A0FB: 13       [80]                     inc     de              ; Increment store index.
+                        
+A0FC: 18A6     [12]     TONEXTITEM     jr      NEXTITEM        ; Get next command item.
+                        
+A0FE:                   RUN
+A0FE: DDE9     [ 8]                     jp      (ix)            ; Run at current XAM index.
+                        
+A100:                   NOTSTOR
+A100: CB7F     [ 8]                     bit     7, a
+A102: 202D     [15|20]                  jr      nz, XAMNEXT     ; B7 = 0 for XAM, 1 for BLOCK XAM.
+A104: 545D     [ 8]     SETADR         ld      de, hl          ; Copy hex data to 'store index'.
+A106: E5       [19]                     push    hl              ; And to 'XAM index'.
+A107: DDE1     [33]                     pop     ix              ;   ...
+A109: BF       [37]                     cp      a               ; Set zero flag
+                        
+A10A:                   NXTPRNT
+A10A: C226A1   [10|10]                  jp      nz, PRDATA      ; NE means no address to print.
+A10D: 3E0D     [17]                     ld      a, $0D          ; CR.
+A10F: CD5DA1   [34]                     call    ECHO            ; Output it.
+A112: 3E0A     [41]                     ld      a, $0A          ; LF.
+A114: CD5DA1   [58]                     call    ECHO            ; Output it.
+A117: DD7C     [66]                     ld      a, ixh          ; 'Examine index' high-order byte.
+A119: CD46A1   [83]                     call    PRBYTE          ; Output it in hex format.
+A11C: DD7D     [91]                     ld      a, ixl          ; Low-order 'examine index' byte.
+A11E: CD46A1   [108]                    call    PRBYTE          ; Output it in hex format.
+A121: 3E3A     [115]                    ld      a, $3A          ; ":".
+A123: CD5DA1   [132]                    call    ECHO            ; Output it.
+                        
+A126:                   PRDATA
+A126: 3E20     [ 7]                     ld      a, $20          ; Blank.
+A128: CD5DA1   [24]                     call    ECHO            ; Output it.
+A12B: DD7E00   [43]                     ld      a, (ix)         ; Get data byte at 'examine index'.
+A12E: CD46A1   [60]                     call    PRBYTE          ; Output it in hex format.
+A131: 3E00     [ 7]     XAMNEXT        ld      a, $00
+A133: 321DB4   [20]                     ld      (MODE), a       ; 0 -> MODE (XAM mode).
+A136: DD7D     [28]                     ld      a, ixl
+A138: BD       [32]                     cp      l               ; Compare 'examine index' to hex data.
+A139: DD7C     [40]                     ld      a, ixh
+A13B: 9C       [44]                     sbc     a, h
+A13C: 30BE     [51|56]                  jr      nc, TONEXTITEM  ; Not less, so no more data to output.
+                        
+A13E: DD23     [61]                     inc     ix              ; Increment 'examine index'.
+                        
+A140:                   MOD8CHK
+A140: DD7D     [ 8]                     ld      a, ixl          ; Check low-order 'examine index' byte
+A142: E607     [15]                     and     a, $07          ; For MOD 8 = 0
+A144: 18C4     [27]                     jr      NXTPRNT         ; Always taken.
+                        
+A146:                   PRBYTE
+A146: F5       [11]                     push    af              ; Save A for LSD.
+A147: CB3F     [19]                     srl     a
+A149: CB3F     [27]                     srl     a
+A14B: CB3F     [35]                     srl     a               ; MSD to LSD position.
+A14D: CB3F     [43]                     srl     a
+A14F: CD53A1   [60]                     call    PRHEX           ; Output hex digit.
+A152: F1       [70]                     pop     af              ; Restore A.
+                        
+A153:                   PRHEX
+A153: E60F     [ 7]                     and     $0F             ; Mask LSD for hex print.
+A155: F630     [14]                     or      $30             ; Add "0".
+A157: FE3A     [21]                     cp      $3A             ; Digit?
+A159: 3802     [28|33]                  jr      c, ECHO         ; Yes, output it.
+A15B: CE07     [35]                     adc     $07             ; Add offset for letter.
+                        
+A15D:                   ECHO
+A15D: CD90A1   [17]                     CALL OUTCH             ; Output character in A.
+A160: C9       [27]                     ret                     ; Return.
+                        
+A161: FD2B     [10]     BACKPACK        DEC    iy              ; Back up text index.
+A163: 3E20     [17]                     ld      a, SPC           ; Send space (overwrite)
+A165: CD5DA1   [34]                     call    ECHO
+A168: 3E08     [41]                     ld      a, BS           ; and Backspace again.
+A16A: CD5DA1   [58]                     call    ECHO
+A16D: C9       [68]                     RET
+                        
+                        
+A16E:                   INIT8251	
+                        
+A16E: 3E40     [ 7]             LD A,040H            
+A170: D301     [18]             OUT (001H),A  
+A172: 00       [22]             NOP
+A173: 00       [26]     	    NOP  
+A174: 3E40     [33]             LD A,040H            
+A176: D301     [44]             OUT (001H),A
+A178: 00       [48]     	    NOP
+A179: 00       [52]     	    NOP  
+                                          
+A17A: 3E40     [59]             LD A,040H            
+A17C: D301     [70]             OUT (001H),A  ; WORST CASE INIT
+A17E: 00       [74]     	    NOP
+A17F: 00       [78]     	    NOP
+                        	
+                        	
+                        	
+A180: 3E40     [85]             LD A,040H            
+A182: D301     [96]             OUT (001H),A  		; RESET 8251
+A184: 00       [100]            NOP
+A185: 00       [104]    	    NOP
+                        
+A186: 3E4E     [111]            LD A,04EH            
+A188: D301     [122]            OUT (001H),A      	 ; 8-N-1  CLK/1  4EH FOR /16, 4D FOR /1  (MODE )
+A18A: 00       [126]            NOP
+A18B: 00       [130]    	    NOP    
+A18C: 3E37     [137]            LD A,037H            
+A18E: D301     [148]            OUT (001H),A      	 ; RESET ALL ERROR FLAGS AND ENABLE RXRDY,TXRDY (COMMAND)
+                        
+                                
+                        ;-----------------------------------------------------------------------------------;-------------------------------------------------------------------------------------
+                        	
+                        ;TXD ROUTINE sends contents of A REGISTER  to serial out pin 
+                        ;19200 BAUD, 8-N-1
+                        
+                        
+A190: F5       [11]     OUTCH    PUSH AF
+A191: DB01     [11]     LOPTX 	IN A,(01H)
+A193: E601     [18]     	AND 001H     ;TXRDY?
+A195: CA91A1   [28|28]  	JP Z, LOPTX
+A198: F1       [38]             POP AF
+A199: D300     [49]     	OUT (00H),A
+A19B: C9       [59]             RET
+                        	
+                        ;----------------------------------------------------------------------------------
+                        ;RXD ROUTINE receives 1 bayt from serial  to A REGISTER 
+                        ;19200 BAUD, 8-N-1
+                        
+A19C:                   GETCH    
+A19C: 3E37     [ 7]     	LD A,037H
+A19E: D301     [18]     	OUT (01),A ;ENABLE TX AND RX AND CLEAR ERR BITS
+                        	
+A1A0: DB01     [11]     LOPTR 	IN A,(01H)
+A1A2: E602     [18]     	AND 002H     ;TXRDY?
+A1A4: CAA0A1   [28|28]  	JP Z, LOPTR
+A1A7: DB00     [39]             IN A,(00H)   ;RECEIVE CHAR
+A1A9: C9       [49]     	RET
+                        
+A1AA: 00000000              DB 0,0,0,0,0,0,0,0
+A1AE: 00000000          
+                        	
+                        	END
+
+
+; +++ segments +++
+
+#CODE          = $A000 = 40960,  size = $01B2 =   434
+
+; +++ global symbols +++
+
+BACKPACK   = $A161 = 41313          wozmon.asm:266
+BACKSL     = $005C =    92          wozmon.asm:28 (unused)
+BACKSPACE  = $A069 = 41065          wozmon.asm:115
+BLSKIP     = $A0A2 = 41122          wozmon.asm:144
+BS         = $0008 =     8          wozmon.asm:20
+COLON      = $003A =    58          wozmon.asm:27 (unused)
+COUNTR     = $B420 = 46112          wozmon.asm:44
+CR         = $000D =    13          wozmon.asm:22 (unused)
+CTRLQ      = $0011 =    17          wozmon.asm:29 (unused)
+DIG        = $A0D4 = 41172          wozmon.asm:170
+DOT        = $002E =    46          wozmon.asm:26 (unused)
+ECHO       = $A15D = 41309          wozmon.asm:262
+ESC        = $001B =    27          wozmon.asm:23 (unused)
+ESCAPE     = $A051 = 41041          wozmon.asm:102
+FF         = $000C =    12          wozmon.asm:24 (unused)
+GETCH      = $A19C = 41372          wozmon.asm:323
+GETLIN     = $A05B = 41051          wozmon.asm:107
+H          = $B405 = 46085          wozmon.asm:41
+HEXSHIFT   = $A0DE = 41182          wozmon.asm:177
+INBUF      = $B000 = 45056          wozmon.asm:47
+INIT8251   = $A16E = 41326          wozmon.asm:274 (unused)
+L          = $B404 = 46084          wozmon.asm:40
+LF         = $000A =    10          wozmon.asm:21 (unused)
+LOPTR      = $A1A0 = 41376          wozmon.asm:327
+LOPTX      = $A191 = 41361          wozmon.asm:312
+MOD8CHK    = $A140 = 41280          wozmon.asm:241 (unused)
+MODE       = $B41D = 46109          wozmon.asm:43
+NEXTCHAR   = $A07B = 41083          wozmon.asm:124
+NEXTHEX    = $A0C5 = 41157          wozmon.asm:162
+NEXTITEM   = $A0A4 = 41124          wozmon.asm:146
+NOTCR      = $A043 = 41027          wozmon.asm:91
+NOTHEX     = $A0E9 = 41193          wozmon.asm:186
+NOTSTOR    = $A100 = 41216          wozmon.asm:205
+NXTPRNT    = $A10A = 41226          wozmon.asm:213
+OUTCH      = $A190 = 41360          wozmon.asm:311
+PRBYTE     = $A146 = 41286          wozmon.asm:246
+PRDATA     = $A126 = 41254          wozmon.asm:226
+PRHEX      = $A153 = 41299          wozmon.asm:255
+QUIT       = $0072 =   114          wozmon.asm:33
+RESET      = $A003 = 40963          wozmon.asm:60
+RUN        = $A0FE = 41214          wozmon.asm:202
+SADDR      = $B423 = 46115          wozmon.asm:45 (unused)
+SETADR     = $A104 = 41220          wozmon.asm:208 (unused)
+SETBLOCK   = $A09B = 41115          wozmon.asm:139
+SETSTOR    = $A09D = 41117          wozmon.asm:141
+SPC        = $0020 =    32          wozmon.asm:25
+STH        = $B403 = 46083          wozmon.asm:39
+STL        = $B402 = 46082          wozmon.asm:38
+TONEXTITEM = $A0FC = 41212          wozmon.asm:200
+XAMH       = $B401 = 46081          wozmon.asm:37
+XAML       = $B400 = 46080          wozmon.asm:36
+XAMNEXT    = $A131 = 41265          wozmon.asm:231
+YSAV       = $B406 = 46086          wozmon.asm:42
+_end       = $A1B2 = 41394          wozmon.asm:51 (unused)
+_size      = $01B2 =   434          wozmon.asm:51 (unused)
+stack_top  = $FFFF = 65535          wozmon.asm:31
+
+
+total time: 0.6270 sec.
+no errors
