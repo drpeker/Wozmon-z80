@@ -6,7 +6,7 @@
 ; 8251 init code added and must be called once before using the monitor to run as
 ; standalone system.
 ; Wozmon for Z80 By Dr.Peker 2025
-; Original code from Wozmon for 6502 by Christian Welzel 2023
+; inspired code from  Christian Welzel 2023
 ; Christian Welzel 2023 - www.welzel-online.ch
 ; 
 ; Code can be compiled in Zasm assembler by following parameters:
@@ -262,7 +262,7 @@ PRHEX
 ECHO
                 CALL OUTCH             ; Output character in A.
                 ret                     ; Return.
-
+;Backspace bug removed with this code below
 BACKPACK        DEC    iy              ; Back up text index.
                 ld      a, SPC           ; Send space (overwrite)
                 call    ECHO
@@ -302,7 +302,8 @@ INIT8251
         OUT (001H),A      	 ; RESET ALL ERROR FLAGS AND ENABLE RXRDY,TXRDY (COMMAND)
 
         
-;-----------------------------------------------------------------------------------;-------------------------------------------------------------------------------------
+;-----------------------------------------------------------------------------------
+;-----------------------------------------------------------------------------------
 	
 ;TXD ROUTINE sends contents of A REGISTER  to serial out pin 
 ;19200 BAUD, 8-N-1
@@ -332,4 +333,5 @@ LOPTR 	IN A,(01H)
 
     DB 0,0,0,0,0,0,0,0
 	
+
 	END
